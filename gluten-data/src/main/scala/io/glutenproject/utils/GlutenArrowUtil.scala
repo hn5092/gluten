@@ -407,11 +407,19 @@ object GlutenArrowUtil extends Logging {
 
   def toSchema(batch: ColumnarBatch): Schema = {
     val fields = new java.util.ArrayList[Field](batch.numCols)
+    val fieldNames = new util.HashSet[String]()
     for (i <- 0 until batch.numCols) {
       val col: ColumnVector = batch.column(i)
       fields.add(col match {
         case vector: ArrowWritableColumnVector =>
-          vector.getValueVector.getField
+          val name = vector.getValueVector.getField.getName
+          if (fieldNames.contains(name)) {
+            val field = vector.getValueVector.getField
+            new Field(field.getName + s"${i}", field.getFieldType, field.getChildren)
+          } else {
+            fieldNames.add(name)
+            vector.getValueVector.getField
+          }
         case _ =>
           throw new UnsupportedOperationException(
             s"Unexpected vector type: ${col.getClass.toString}")

@@ -32,7 +32,7 @@ import org.apache.spark.sql.catalyst.plans.{LeftOuter, LeftSemi, RightOuter}
 import org.apache.spark.sql.catalyst.rules.{PlanChangeLogger, Rule}
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive._
-import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec}
+import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, FileScan}
 import org.apache.spark.sql.execution.exchange._
@@ -153,6 +153,22 @@ case class TransformPreOverrides() extends Rule[SparkPlan] {
       case plan: HashAggregateExec =>
         val child = replaceWithTransformerPlan(plan.child)
         logDebug(s"Columnar Processing for ${plan.getClass} is currently supported.")
+        BackendsApiManager.getSparkPlanExecApiInstance
+          .genHashAggregateExecTransformer(
+            plan.requiredChildDistributionExpressions,
+            plan.groupingExpressions,
+            plan.aggregateExpressions,
+            plan.aggregateAttributes,
+            plan.initialInputBufferOffset,
+            plan.resultExpressions,
+            child)
+      case plan: SortAggregateExec =>
+        var child = if (plan.child.isInstanceOf[SortExec]) {
+          plan.child.children.head
+        } else {
+          plan.child
+        }
+         child = replaceWithTransformerPlan(child)
         BackendsApiManager.getSparkPlanExecApiInstance
           .genHashAggregateExecTransformer(
             plan.requiredChildDistributionExpressions,

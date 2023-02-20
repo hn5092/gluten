@@ -29,7 +29,7 @@ import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.catalyst.trees.TreeNodeTag
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.adaptive.{AQEShuffleReadExec, BroadcastQueryStageExec}
-import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec}
+import org.apache.spark.sql.execution.aggregate.{HashAggregateExec, ObjectHashAggregateExec, SortAggregateExec}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 import org.apache.spark.sql.execution.exchange._
@@ -361,6 +361,27 @@ case class AddTransformHintRule() extends Rule[SparkPlan] {
                 plan.initialInputBufferOffset,
                 plan.resultExpressions,
                 plan.child)
+            TransformHints.tag(plan, transformer.doValidate().toTransformHint)
+          }
+
+        case plan: SortAggregateExec =>
+          if (!enableColumnarHashAgg) {
+            TransformHints.tagNotTransformable(plan)
+          } else {
+            val child = if (plan.child.isInstanceOf[SortExec]) {
+              plan.child.children.head
+              } else {
+              plan.child
+            }
+            val transformer = BackendsApiManager.getSparkPlanExecApiInstance
+              .genHashAggregateExecTransformer(
+                plan.requiredChildDistributionExpressions,
+                plan.groupingExpressions,
+                plan.aggregateExpressions,
+                plan.aggregateAttributes,
+                plan.initialInputBufferOffset,
+                plan.resultExpressions,
+                child)
             TransformHints.tag(plan, transformer.doValidate().toTransformHint)
           }
         case plan: UnionExec =>

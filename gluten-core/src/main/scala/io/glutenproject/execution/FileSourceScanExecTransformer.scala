@@ -18,17 +18,19 @@
 package io.glutenproject.execution
 
 import java.util.concurrent.TimeUnit.NANOSECONDS
-
 import scala.collection.mutable.HashMap
 import io.glutenproject.GlutenConfig
 import io.glutenproject.backendsapi.BackendsApiManager
+import io.glutenproject.execution.FileSourceScanExecTransformer.isDynamicPruningFilter
 import io.glutenproject.vectorized.OperatorMetrics
+import org.apache.hadoop.fs.Path
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.TableIdentifier
+import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, AttributeReference, BoundReference, DynamicPruningExpression, Expression, PlanExpression, Predicate}
 import org.apache.spark.sql.connector.read.InputPartition
-import org.apache.spark.sql.execution.{FileSourceScanExec, InSubqueryExec, SQLExecution, ScalarSubquery, SparkPlan}
-import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, PartitionDirectory}
+import org.apache.spark.sql.execution.{FileSourceScanExec, InSubqueryExec, PartitionedFileUtil, ScalarSubquery, SparkPlan, SQLExecution}
+import org.apache.spark.sql.execution.datasources.{BucketingUtils, FilePartition, HadoopFsRelation, PartitionDirectory}
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -144,12 +146,9 @@ class FileSourceScanExecTransformer(@transient relation: HadoopFsRelation,
   override def outputAttributes(): Seq[Attribute] = output
 
   override def getPartitions: Seq[Seq[InputPartition]] =
-    BackendsApiManager.getTransformerApiInstance.genInputPartitionSeq(
-      relation, dynamicallySelectedPartitions).map(Seq(_))
+    getFilePartitions().map(Seq(_))
 
-  override def getFlattenPartitions: Seq[InputPartition] =
-    BackendsApiManager.getTransformerApiInstance.genInputPartitionSeq(
-      relation, dynamicallySelectedPartitions)
+  override def getFlattenPartitions: Seq[InputPartition] = getFilePartitions()
 
   override def getPartitionSchemas: StructType = relation.partitionSchema
 
@@ -180,12 +179,14 @@ class FileSourceScanExecTransformer(@transient relation: HadoopFsRelation,
   }
 
   override def doValidate(): Boolean = {
-    // Bucketing table has `bucketId` in filename, should apply this in backends
-    if (!bucketedScan) {
-      super.doValidate()
-    } else {
-      false
-    }
+    super.doValidate()
+//
+//    // Bucketing table has `bucketId` in filename, should apply this in backends
+//    if (!bucketedScan) {
+//      super.doValidate()
+//    } else {
+//      false
+//    }
   }
 
   protected override def doExecuteColumnar(): RDD[ColumnarBatch] = {
@@ -230,12 +231,10 @@ class FileSourceScanExecTransformer(@transient relation: HadoopFsRelation,
     val optimizerMetadataTimeNs = relation.location.metadataOpsTimeNs.getOrElse(0L)
     val startTime = System.nanoTime()
     val ret =
-      relation.location.listFiles(
-        partitionFilters.filterNot(FileSourceScanExecTransformer.isDynamicPruningFilter),
-        dataFilters)
+      relation.location.listFiles(partitionFilters.filterNot(isDynamicPruningFilter), dataFilters)
     setFilesNumAndSizeMetric(ret, true)
-    val timeTakenMs = NANOSECONDS.toMillis(
-      (System.nanoTime() - startTime) + optimizerMetadataTimeNs)
+    val timeTakenMs =
+      NANOSECONDS.toMillis((System.nanoTime() - startTime) + optimizerMetadataTimeNs)
     driverMetrics("metadataTime") = timeTakenMs
     ret
   }.toArray
@@ -243,24 +242,10 @@ class FileSourceScanExecTransformer(@transient relation: HadoopFsRelation,
   // We can only determine the actual partitions at runtime when a dynamic partition filter is
   // present. This is because such a filter relies on information that is only available at run
   // time (for instance the keys used in the other side of a join).
-  @transient lazy val dynamicallySelectedPartitions: Array[PartitionDirectory] = {
-    val dynamicPartitionFilters = partitionFilters.filter(
-      FileSourceScanExecTransformer.isDynamicPruningFilter)
-    val selected = if (dynamicPartitionFilters.nonEmpty) {
-      // When it includes some DynamicPruningExpression,
-      // it needs to execute InSubqueryExec first,
-      // because doTransform path can't execute 'doExecuteColumnar' which will
-      // execute prepare subquery first.
-      dynamicPartitionFilters.foreach {
-        case DynamicPruningExpression(inSubquery: InSubqueryExec) =>
-          executeInSubqueryForDynamicPruningExpression(inSubquery)
-        case e: Expression =>
-          e.foreach {
-            case s: ScalarSubquery => s.updateResult()
-            case _ =>
-          }
-        case _ =>
-      }
+  @transient private lazy val dynamicallySelectedPartitions: Array[PartitionDirectory] = {
+    val dynamicPartitionFilters = partitionFilters.filter(isDynamicPruningFilter)
+
+    if (dynamicPartitionFilters.nonEmpty) {
       val startTime = System.nanoTime()
       // call the file index for the files matching all filters except dynamic partition filters
       val predicate = dynamicPartitionFilters.reduce(And)
@@ -276,10 +261,140 @@ class FileSourceScanExecTransformer(@transient relation: HadoopFsRelation,
       driverMetrics("pruningTime") = timeTakenMs
       ret
     } else {
+      sendDriverMetrics()
       selectedPartitions
     }
-    sendDriverMetrics()
-    selected
+  }
+  var filePartitions: Seq[FilePartition] = Nil
+
+  def getFilePartitions(): Seq[FilePartition] = {
+    if (filePartitions.isEmpty) {
+      filePartitions = if (bucketedScan) {
+        createBucketedReadRDD(relation.bucketSpec.get, dynamicallySelectedPartitions, relation)
+      } else {
+        createReadRDD(dynamicallySelectedPartitions, relation)
+      }
+    }
+    filePartitions
+  }
+
+  /**
+   * Create an RDD for bucketed reads.
+   * The non-bucketed variant of this function is [[createReadRDD]].
+   *
+   * The algorithm is pretty simple: each RDD partition being returned should include all the files
+   * with the same bucket id from all the given Hive partitions.
+   *
+   * @param bucketSpec         the bucketing spec.
+   * @param readFile           a function to read each (part of a) file.
+   * @param selectedPartitions Hive-style partition that are part of the read.
+   * @param fsRelation         [[HadoopFsRelation]] associated with the read.
+   */
+  private def createBucketedReadRDD(
+    bucketSpec: BucketSpec,
+    selectedPartitions: Array[PartitionDirectory],
+    fsRelation: HadoopFsRelation): Seq[FilePartition] = {
+    logInfo(s"Planning with ${bucketSpec.numBuckets} buckets")
+    val filesGroupedToBuckets =
+      selectedPartitions
+        .flatMap { p =>
+          p.files.map { f =>
+            PartitionedFileUtil.getPartitionedFile(f, f.getPath, p.values)
+          }
+        }
+        .groupBy { f =>
+          BucketingUtils
+            .getBucketId(new Path(f.filePath).getName)
+            // TODO(SPARK-39163): Throw an exception w/ error class for an invalid bucket file
+            .getOrElse(throw new IllegalStateException(s"Invalid bucket file ${f.filePath}"))
+        }
+
+    val prunedFilesGroupedToBuckets = if (optionalBucketSet.isDefined) {
+      val bucketSet = optionalBucketSet.get
+      filesGroupedToBuckets.filter { f =>
+        bucketSet.get(f._1)
+      }
+    } else {
+      filesGroupedToBuckets
+    }
+
+    val filePartitions = optionalNumCoalescedBuckets
+      .map { numCoalescedBuckets =>
+        logInfo(s"Coalescing to ${numCoalescedBuckets} buckets")
+        val coalescedBuckets = prunedFilesGroupedToBuckets.groupBy(_._1 % numCoalescedBuckets)
+        Seq.tabulate(numCoalescedBuckets) { bucketId =>
+          val partitionedFiles = coalescedBuckets
+            .get(bucketId)
+            .map {
+              _.values.flatten.toArray
+            }
+            .getOrElse(Array.empty)
+          FilePartition(bucketId, partitionedFiles)
+        }
+      }
+      .getOrElse {
+        Seq.tabulate(bucketSpec.numBuckets) { bucketId =>
+          FilePartition(bucketId, prunedFilesGroupedToBuckets.getOrElse(bucketId, Array.empty))
+        }
+      }
+
+    filePartitions
+  }
+
+  /**
+   * Create an RDD for non-bucketed reads.
+   * The bucketed variant of this function is [[createBucketedReadRDD]].
+   *
+   * @param readFile           a function to read each (part of a) file.
+   * @param selectedPartitions Hive-style partition that are part of the read.
+   * @param fsRelation         [[HadoopFsRelation]] associated with the read.
+   */
+  private def createReadRDD(
+    selectedPartitions: Array[PartitionDirectory],
+    fsRelation: HadoopFsRelation): Seq[FilePartition] = {
+    val openCostInBytes = fsRelation.sparkSession.sessionState.conf.filesOpenCostInBytes
+    val maxSplitBytes =
+      FilePartition.maxSplitBytes(fsRelation.sparkSession, selectedPartitions)
+    logInfo(
+      s"Planning scan with bin packing, max size: $maxSplitBytes bytes, " +
+        s"open cost is considered as scanning $openCostInBytes bytes.")
+
+    // Filter files with bucket pruning if possible
+    val bucketingEnabled = fsRelation.sparkSession.sessionState.conf.bucketingEnabled
+    val shouldProcess: Path => Boolean = optionalBucketSet match {
+      case Some(bucketSet) if bucketingEnabled =>
+        // Do not prune the file if bucket file name is invalid
+        filePath =>
+          BucketingUtils.getBucketId(filePath.getName).forall(bucketSet.get)
+      case _ =>
+        _ =>
+          true
+    }
+
+    val splitFiles = selectedPartitions
+      .flatMap { partition =>
+        partition.files.flatMap { file =>
+          // getPath() is very expensive so we only want to call it once in this block:
+          val filePath = file.getPath
+
+          if (shouldProcess(filePath)) {
+            val isSplitable =
+              relation.fileFormat.isSplitable(relation.sparkSession, relation.options, filePath)
+            PartitionedFileUtil.splitFiles(
+              sparkSession = relation.sparkSession,
+              file = file,
+              filePath = filePath,
+              isSplitable = isSplitable,
+              maxSplitBytes = maxSplitBytes,
+              partitionValues = partition.values)
+          } else {
+            Seq.empty
+          }
+        }
+      }
+      .sortBy(_.length)(implicitly[Ordering[Long]].reverse)
+
+    FilePartition.getFilePartitions(relation.sparkSession, splitFiles, maxSplitBytes)
   }
 
 }

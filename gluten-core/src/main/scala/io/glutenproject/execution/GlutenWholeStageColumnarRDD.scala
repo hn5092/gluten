@@ -155,8 +155,9 @@ class GlutenWholeStageColumnarRDD(sc: SparkContext,
     } else {
       val numParts = inputPartitions.size
       if (!rdds.forall(rdd => rdd.partitions.length == numParts)) {
-        throw new IllegalArgumentException(
-          s"Can't zip RDDs with unequal numbers of partitions: ${rdds.map(_.partitions.length)}")
+        throw new RuntimeException(
+          s"Can't zip RDDs with unequal numbers of partitions: ${rdds.map(_.partitions.length)}" +
+            s"input is ${inputPartitions.length}")
       }
       Array.tabulate[Partition](numParts) { i =>
         FirstZippedPartitionsPartition(i, inputPartitions(i), rdds)

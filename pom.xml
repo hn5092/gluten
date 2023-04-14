@@ -49,7 +49,7 @@
     <delta.binary.version>20</delta.binary.version>
     <scala.binary.version>2.12</scala.binary.version>
     <scala.version>${spark32.scala}</scala.version>
-    <spark.version>${spark32.version}</spark.version>
+    <spark.version>3.4.0</spark.version>
     <sparkbundle.version>${spark32bundle.version}</sparkbundle.version>
     <arrow.version>10.0.0-SNAPSHOT</arrow.version>
     <arrow-memory.artifact>arrow-memory-unsafe</arrow-memory.artifact>
@@ -111,7 +111,7 @@
       </activation>
       <properties>
         <scala.version>${spark32.scala}</scala.version>
-        <spark.version>${spark32.version}</spark.version>
+        <spark.version>3.4.0</spark.version>
         <delta.version>${delta20.version}</delta.version>
         <delta.binary.version>20</delta.binary.version>
         <sparkbundle.version>${spark32bundle.version}</sparkbundle.version>
@@ -121,7 +121,7 @@
       <id>spark-3.3</id>
       <properties>
         <scala.version>${spark33.scala}</scala.version>
-        <spark.version>${spark33.version}</spark.version>
+        <spark.version>3.4.0</spark.version>
         <delta.version>${delta22.version}</delta.version>
         <delta.binary.version>22</delta.binary.version>
         <sparkbundle.version>${spark33bundle.version}</sparkbundle.version>

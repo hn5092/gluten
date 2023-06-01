@@ -45,7 +45,7 @@
     <spark33bundle.version>3.3</spark33bundle.version>
     <delta20.version>2.0.1</delta20.version>
     <delta22.version>2.2.0</delta22.version>
-    <delta.version>${delta20.version}</delta.version>
+    <delta.version>2.4.0</delta.version>
     <delta.binary.version>20</delta.binary.version>
     <scala.binary.version>2.12</scala.binary.version>
     <scala.version>${spark32.scala}</scala.version>
@@ -117,7 +117,7 @@
         <scala.version>${spark32.scala}</scala.version>
         <spark.major.version>3</spark.major.version>
         <spark.version>${spark32.version}</spark.version>
-        <delta.version>${delta20.version}</delta.version>
+        <delta.version>2.4.0</delta.version>
         <delta.binary.version>20</delta.binary.version>
         <sparkbundle.version>${spark32bundle.version}</sparkbundle.version>
         <sparkshim.artifactId>${spark32.shim.version}</sparkshim.artifactId>
@@ -129,7 +129,7 @@
         <scala.version>${spark33.scala}</scala.version>
         <spark.major.version>3</spark.major.version>
         <spark.version>${spark33.version}</spark.version>
-        <delta.version>${delta22.version}</delta.version>
+        <delta.version>2.4.0</delta.version>
         <delta.binary.version>22</delta.binary.version>
         <sparkbundle.version>${spark33bundle.version}</sparkbundle.version>
         <sparkshim.artifactId>${spark33.shim.version}</sparkshim.artifactId>

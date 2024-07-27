@@ -66,7 +66,7 @@
     <clickhouse.lib.path>/usr/local/clickhouse/lib/libch.so</clickhouse.lib.path>
     <tpcds.data.path>/data/tpcds-data-sf1</tpcds.data.path>
     <fasterxml.spark33.version>2.13.3</fasterxml.spark33.version>
-    <fasterxml.version>${fasterxml.spark33.version}</fasterxml.version>
+    <fasterxml.version>2.15.0</fasterxml.version>
     <junit.version>4.13.1</junit.version>
 
     <substrait.version>0.5.0</substrait.version>

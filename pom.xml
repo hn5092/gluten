@@ -55,7 +55,7 @@
     <sparkbundle.version>${spark32bundle.version}</sparkbundle.version>
     <arrow.version>12.0.0</arrow.version>
     <arrow-memory.artifact>arrow-memory-unsafe</arrow-memory.artifact>
-    <hadoop.version>${hadoop.version}</hadoop.version>
+    <hadoop.version>2.9.1</hadoop.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <project.prefix>spark-sql-columnar</project.prefix>
@@ -143,25 +143,25 @@
         </property>
       </activation>
       <properties>
-        <hadoop.version>2.7.4</hadoop.version>
+        <hadoop.version>2.9.1</hadoop.version>
       </properties>
     </profile>
     <profile>
       <id>hadoop-3.2</id>
       <properties>
-        <hadoop.version>3.2.0</hadoop.version>
+        <hadoop.version>2.9.1</hadoop.version>
       </properties>
     </profile>
     <profile>
       <id>dataproc-2.0</id>
       <properties>
-        <hadoop.version>3.2.2</hadoop.version>
+        <hadoop.version>2.9.1</hadoop.version>
       </properties>
     </profile>
     <profile>
       <id>emr-6.3.0</id>
       <properties>
-        <hadoop.version>3.2.2</hadoop.version>
+        <hadoop.version>2.9.1</hadoop.version>
       </properties>
     </profile>
     <profile>
